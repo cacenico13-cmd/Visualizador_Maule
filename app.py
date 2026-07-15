@@ -219,7 +219,13 @@ for nombre, gdf in capas.items():
         folium.GeoJson(gdf, name=nombre).add_to(m)
 
 folium.LayerControl().add_to(m)
-salida_mapa = st_folium(m, width=1000, height=500, key="mapa_final")
+salida_mapa = st_folium(
+    m, 
+    width=1000, 
+    height=500, 
+    key="mapa_final",
+    returned_objects=["last_active_drawing", "last_clicked", "last_object_clicked"]
+)
 
 # ─────────────────────────────────────────────────────────────
 # Análisis e Integración de Gráfico
