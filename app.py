@@ -211,11 +211,11 @@ for nombre, gdf in capas.items():
 folium.LayerControl().add_to(m)
 
 salida_mapa = st_folium(
-    m, 
-    width=1000, 
-    height=500, 
-    key="mapa_final",
-    returned_objects=["last_active_drawing"]
+    m,
+    width=None,
+    height=600,
+    use_container_width=True,
+    key="mapa_final"
 )
 
 # ─────────────────────────────────────────────────────────────
