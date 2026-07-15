@@ -11,3 +11,4 @@ from rasterio.warp import calculate_default_transform, reproject, Resampling
 import io, base64
 from PIL import Image
 import matplotlib.colors as mcolors
+openpyxl
