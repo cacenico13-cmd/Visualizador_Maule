@@ -20,7 +20,7 @@ st.title("💧 GeoVisualizador Cuenca del Maule (Calidad de Agua)")
 DATA = Path("data")
 
 # ─────────────────────────────────────────────────────────────
-# Lógica de Rasters
+# Lógica de Rasters (Con Escudo Anti-Crashes)
 # ─────────────────────────────────────────────────────────────
 COLORMAP_DEM = [
     (0.00, "#006400"), (0.15, "#228B22"), (0.30, "#9ACD32"), 
@@ -50,17 +50,31 @@ def aplicar_colormap_dem(band, nodata):
 
 def raster_a_overlay(raster_path, es_dem=False):
     with rasterio.open(raster_path) as src:
-        if src.crs and src.crs.to_epsg() != 4326:
+        crs_origen = src.crs
+        transform_orig = src.transform
+        
+        # 1. FIX: Inyectar proyección si Streamlit Cloud la pierde
+        if crs_origen is None:
+            crs_origen = "EPSG:32719"
+
+        es_wgs84 = False
+        if crs_origen:
+            if hasattr(crs_origen, 'to_epsg') and crs_origen.to_epsg() == 4326:
+                es_wgs84 = True
+            elif str(crs_origen).upper() == "EPSG:4326":
+                es_wgs84 = True
+
+        if not es_wgs84:
             transform, width, height = calculate_default_transform(
-                src.crs, "EPSG:4326", src.width, src.height, *src.bounds
+                crs_origen, "EPSG:4326", src.width, src.height, *src.bounds
             )
             data = np.zeros((src.count, height, width), dtype=np.float32)
             for i in range(1, src.count + 1):
                 reproject(
                     source=rasterio.band(src, i),
                     destination=data[i - 1],
-                    src_transform=src.transform,
-                    src_crs=src.crs,
+                    src_transform=transform_orig,
+                    src_crs=crs_origen,
                     dst_transform=transform,
                     dst_crs="EPSG:4326",
                     resampling=Resampling.bilinear,
@@ -69,6 +83,10 @@ def raster_a_overlay(raster_path, es_dem=False):
         else:
             data = src.read().astype(np.float32)
             bounds_wgs84 = src.bounds
+
+        # 2. FIX: Validar que no se pase de latitud +-90 (evita la pantalla en blanco)
+        if bounds_wgs84[0] < -180 or bounds_wgs84[2] > 180 or bounds_wgs84[1] < -90 or bounds_wgs84[3] > 90:
+            raise ValueError(f"Las coordenadas {bounds_wgs84} exceden los límites de la Tierra. El TIF está corrupto.")
 
         nodata  = src.nodata
         dem_min = dem_max = None
@@ -176,31 +194,23 @@ for nombre, gdf in capas.items():
                     folium.Marker(location=[pt.y, pt.x], icon=etiqueta).add_to(fg_toponimos)
         fg_toponimos.add_to(m)
         
-    # Capa de Hidrología (Filtro exacto según la imagen)
+    # Capa de Hidrología (Ríos)
     elif "hidro" in nombre_lower or "subcuen" in nombre_lower:
-        
-        # Filtro exacto usando los nombres de la tabla
         if "Dren_Tipo" in gdf.columns:
             gdf = gdf[gdf["Dren_Tipo"] == "Río"]
             
-        # Dibujar solo si la capa no quedó vacía tras filtrar
         if not gdf.empty:
             fg_hidro = folium.FeatureGroup(name=nombre)
-            
-            # Usamos las columnas que vimos en tu imagen
             cols_disp = [c for c in ["Nombre", "Dren_Tipo", "Region", "Provincia"] if c in gdf.columns]
             
-            # Dibujar líneas de los ríos en azul
             folium.GeoJson(
                 gdf, 
                 style_function=lambda x: {'color': '#1E88E5', 'weight': 1.5, 'opacity': 0.8},
                 tooltip=folium.GeoJsonTooltip(fields=cols_disp) if cols_disp else None
             ).add_to(fg_hidro)
             
-            # Etiquetar ríos usando exactamente la columna 'Nombre'
             if "Nombre" in gdf.columns:
                 nombres_vistos = set()
-                
                 for _, row in gdf.iterrows():
                     if row.geometry and not pd.isna(row["Nombre"]):
                         texto = str(row["Nombre"]).strip()
@@ -219,12 +229,14 @@ for nombre, gdf in capas.items():
         folium.GeoJson(gdf, name=nombre).add_to(m)
 
 folium.LayerControl().add_to(m)
+
+# 3. FIX: Limitar returned_objects para que React no reviente con removeChild
 salida_mapa = st_folium(
     m, 
     width=1000, 
     height=500, 
     key="mapa_final",
-    returned_objects=["last_active_drawing", "last_clicked", "last_object_clicked"]
+    returned_objects=["last_active_drawing"]
 )
 
 # ─────────────────────────────────────────────────────────────
