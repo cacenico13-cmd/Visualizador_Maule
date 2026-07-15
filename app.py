@@ -20,7 +20,7 @@ st.title("💧 GeoVisualizador Cuenca del Maule (Calidad de Agua)")
 DATA = Path("data")
 
 # ─────────────────────────────────────────────────────────────
-# Lógica de Rasters (Con Escudo Anti-Crashes)
+# Lógica de Rasters
 # ─────────────────────────────────────────────────────────────
 COLORMAP_DEM = [
     (0.00, "#006400"), (0.15, "#228B22"), (0.30, "#9ACD32"), 
@@ -32,19 +32,14 @@ def aplicar_colormap_dem(band, nodata):
     posiciones = [p for p, _ in COLORMAP_DEM]
     colores    = [c for _, c in COLORMAP_DEM]
     cmap = mcolors.LinearSegmentedColormap.from_list("dem", list(zip(posiciones, colores)))
-
     mascara = (band == nodata) if nodata is not None else np.zeros_like(band, dtype=bool)
     valid   = band[~mascara]
-
     dem_min = float(valid.min()) if len(valid) > 0 else 0
     dem_max = float(valid.max()) if len(valid) > 0 else 1
-
     norm  = mcolors.Normalize(vmin=dem_min, vmax=dem_max)
     rgba  = cmap(norm(band))
-
     rgba[mascara, 3] = 0
     rgba[~mascara, 3] = 0.82
-
     img_array = (rgba * 255).astype(np.uint8)
     return img_array, dem_min, dem_max
 
@@ -53,7 +48,6 @@ def raster_a_overlay(raster_path, es_dem=False):
         crs_origen = src.crs
         transform_orig = src.transform
         
-        # 1. FIX: Inyectar proyección si Streamlit Cloud la pierde
         if crs_origen is None:
             crs_origen = "EPSG:32719"
 
@@ -84,9 +78,9 @@ def raster_a_overlay(raster_path, es_dem=False):
             data = src.read().astype(np.float32)
             bounds_wgs84 = src.bounds
 
-        # 2. FIX: Validar que no se pase de latitud +-90 (evita la pantalla en blanco)
+        # Si las coordenadas colapsan al transformarlas, evitamos que rompa el mapa
         if bounds_wgs84[0] < -180 or bounds_wgs84[2] > 180 or bounds_wgs84[1] < -90 or bounds_wgs84[3] > 90:
-            raise ValueError(f"Las coordenadas {bounds_wgs84} exceden los límites de la Tierra. El TIF está corrupto.")
+            return None, None, None, None
 
         nodata  = src.nodata
         dem_min = dem_max = None
@@ -98,7 +92,6 @@ def raster_a_overlay(raster_path, es_dem=False):
                 rgb = data[:3].copy()
             else:
                 rgb = np.stack([data[0]] * 3)
-
             for i in range(3):
                 band  = rgb[i]
                 mask  = (band == nodata) if nodata is not None else np.zeros_like(band, dtype=bool)
@@ -107,7 +100,6 @@ def raster_a_overlay(raster_path, es_dem=False):
                     mn, mx = np.percentile(valid, 2), np.percentile(valid, 98)
                     rgb[i] = np.clip((band - mn) / (mx - mn + 1e-10), 0, 1)
                 rgb[i][mask] = 0
-
             base = (np.transpose(rgb, (1, 2, 0)) * 255).astype(np.uint8)
             alpha = np.full((base.shape[0], base.shape[1]), 200, dtype=np.uint8)
             if nodata is not None:
@@ -119,11 +111,7 @@ def raster_a_overlay(raster_path, es_dem=False):
         img_pil.save(buf, format="PNG")
         buf.seek(0)
         img_b64 = base64.b64encode(buf.read()).decode("utf-8")
-
-        bounds = [
-            [bounds_wgs84[1], bounds_wgs84[0]],
-            [bounds_wgs84[3], bounds_wgs84[2]],
-        ]
+        bounds = [[bounds_wgs84[1], bounds_wgs84[0]], [bounds_wgs84[3], bounds_wgs84[2]]]
         return img_b64, bounds, dem_min, dem_max
 
 # ─────────────────────────────────────────────────────────────
@@ -147,90 +135,82 @@ def cargar_vectores():
 capas = cargar_vectores()
 
 # ─────────────────────────────────────────────────────────────
-# Mapa
+# Mapa en Caché (La solución al error removeChild)
 # ─────────────────────────────────────────────────────────────
-m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles=None)
+@st.cache_resource
+def crear_mapa_base():
+    m_base = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles=None)
 
-# 1. Agregar Hillshade
-dem_file = DATA / "dem_hillshade.tif"
-if dem_file.exists():
-    try:
-        img_b64, bounds, _, _ = raster_a_overlay(dem_file, es_dem=False)
-        folium.raster_layers.ImageOverlay(
-            image=f"data:image/png;base64,{img_b64}",
-            bounds=bounds,
-            opacity=0.7,
-            name="Sombra de colina"
-        ).add_to(m)
-    except Exception as e:
-        st.error(f"Error cargando DEM: {e}")
+    dem_file = DATA / "dem_hillshade.tif"
+    if dem_file.exists():
+        try:
+            img_b64, bounds, _, _ = raster_a_overlay(dem_file, es_dem=False)
+            if img_b64 and bounds:
+                folium.raster_layers.ImageOverlay(
+                    image=f"data:image/png;base64,{img_b64}",
+                    bounds=bounds, opacity=0.7, name="Sombra de colina"
+                ).add_to(m_base)
+        except Exception:
+            pass
 
-# 2. Agregar mapa base de OpenStreetMap
-folium.TileLayer('openstreetmap', name="Mapa base").add_to(m)
+    folium.TileLayer('openstreetmap', name="Mapa base").add_to(m_base)
 
-# 3. Agregar Vectores y Etiquetas
-for nombre, gdf in capas.items():
-    nombre_lower = nombre.lower()
-    
-    # Capa de Estaciones
-    if "estacion" in nombre_lower:
-        folium.GeoJson(gdf, name=nombre, 
-                       marker=folium.CircleMarker(radius=6, fill=True, color="red"),
-                       tooltip=folium.GeoJsonTooltip(fields=[gdf.columns[1]])).add_to(m)
-                       
-    # Capa de Topónimos
-    elif "toponimo" in nombre_lower:
-        fg_toponimos = folium.FeatureGroup(name=nombre)
-        col_nombre = next((c for c in ["NOMBRE", "Nombre", "nombre", "TEXTO", "TextString", "NAME"] if c in gdf.columns), gdf.columns[0])
-        
-        for _, row in gdf.iterrows():
-            if row.geometry:
-                texto = str(row[col_nombre]).strip()
-                if texto and texto.lower() not in ["none", "nan", ""]:
-                    pt = row.geometry.representative_point()
-                    etiqueta = folium.DivIcon(
-                        html=f'<div style="font-size: 11px; font-weight: bold; color: #222; text-shadow: 1px 1px 3px white, -1px -1px 3px white, 1px -1px 3px white, -1px 1px 3px white; white-space: nowrap;">{texto}</div>'
-                    )
-                    folium.Marker(location=[pt.y, pt.x], icon=etiqueta).add_to(fg_toponimos)
-        fg_toponimos.add_to(m)
-        
-    # Capa de Hidrología (Ríos)
-    elif "hidro" in nombre_lower or "subcuen" in nombre_lower:
-        if "Dren_Tipo" in gdf.columns:
-            gdf = gdf[gdf["Dren_Tipo"] == "Río"]
-            
-        if not gdf.empty:
-            fg_hidro = folium.FeatureGroup(name=nombre)
-            cols_disp = [c for c in ["Nombre", "Dren_Tipo", "Region", "Provincia"] if c in gdf.columns]
-            
-            folium.GeoJson(
-                gdf, 
-                style_function=lambda x: {'color': '#1E88E5', 'weight': 1.5, 'opacity': 0.8},
-                tooltip=folium.GeoJsonTooltip(fields=cols_disp) if cols_disp else None
-            ).add_to(fg_hidro)
-            
-            if "Nombre" in gdf.columns:
-                nombres_vistos = set()
-                for _, row in gdf.iterrows():
-                    if row.geometry and not pd.isna(row["Nombre"]):
-                        texto = str(row["Nombre"]).strip()
-                        if texto and texto.lower() not in ["none", "nan", "sin nombre", ""]:
-                            if texto not in nombres_vistos:
-                                nombres_vistos.add(texto)
-                                pt = row.geometry.representative_point()
-                                etiqueta_rio = folium.DivIcon(
-                                    html=f'<div style="font-size: 10px; font-style: italic; font-weight: bold; color: #0D47A1; text-shadow: 1px 1px 2px white, -1px -1px 2px white, 1px -1px 2px white, -1px 1px 2px white; white-space: nowrap;">{texto}</div>'
-                                )
-                                folium.Marker(location=[pt.y, pt.x], icon=etiqueta_rio).add_to(fg_hidro)
-            fg_hidro.add_to(m)
-        
-    # Capas Generales
-    else:
-        folium.GeoJson(gdf, name=nombre).add_to(m)
+    for nombre, gdf in capas.items():
+        nombre_lower = nombre.lower()
+        if "estacion" in nombre_lower:
+            folium.GeoJson(gdf, name=nombre, 
+                           marker=folium.CircleMarker(radius=6, fill=True, color="red"),
+                           tooltip=folium.GeoJsonTooltip(fields=[gdf.columns[1]])).add_to(m_base)
+        elif "toponimo" in nombre_lower:
+            fg_toponimos = folium.FeatureGroup(name=nombre)
+            col_nombre = next((c for c in ["NOMBRE", "Nombre", "nombre", "TEXTO", "TextString", "NAME"] if c in gdf.columns), gdf.columns[0])
+            for _, row in gdf.iterrows():
+                if row.geometry:
+                    texto = str(row[col_nombre]).strip()
+                    if texto and texto.lower() not in ["none", "nan", ""]:
+                        pt = row.geometry.representative_point()
+                        etiqueta = folium.DivIcon(
+                            html=f'<div style="font-size: 11px; font-weight: bold; color: #222; text-shadow: 1px 1px 3px white, -1px -1px 3px white, 1px -1px 3px white, -1px 1px 3px white; white-space: nowrap;">{texto}</div>'
+                        )
+                        folium.Marker(location=[pt.y, pt.x], icon=etiqueta).add_to(fg_toponimos)
+            fg_toponimos.add_to(m_base)
+        elif "hidro" in nombre_lower or "subcuen" in nombre_lower:
+            if "Dren_Tipo" in gdf.columns:
+                gdf_rios = gdf[gdf["Dren_Tipo"] == "Río"]
+            else:
+                gdf_rios = gdf
 
-folium.LayerControl().add_to(m)
+            if not gdf_rios.empty:
+                fg_hidro = folium.FeatureGroup(name=nombre)
+                cols_disp = [c for c in ["Nombre", "Dren_Tipo", "Region", "Provincia"] if c in gdf_rios.columns]
+                folium.GeoJson(
+                    gdf_rios, 
+                    style_function=lambda x: {'color': '#1E88E5', 'weight': 1.5, 'opacity': 0.8},
+                    tooltip=folium.GeoJsonTooltip(fields=cols_disp) if cols_disp else None
+                ).add_to(fg_hidro)
+                
+                if "Nombre" in gdf_rios.columns:
+                    nombres_vistos = set()
+                    for _, row in gdf_rios.iterrows():
+                        if row.geometry and not pd.isna(row["Nombre"]):
+                            texto = str(row["Nombre"]).strip()
+                            if texto and texto.lower() not in ["none", "nan", "sin nombre", ""]:
+                                if texto not in nombres_vistos:
+                                    nombres_vistos.add(texto)
+                                    pt = row.geometry.representative_point()
+                                    etiqueta_rio = folium.DivIcon(
+                                        html=f'<div style="font-size: 10px; font-style: italic; font-weight: bold; color: #0D47A1; text-shadow: 1px 1px 2px white, -1px -1px 2px white, 1px -1px 2px white, -1px 1px 2px white; white-space: nowrap;">{texto}</div>'
+                                    )
+                                    folium.Marker(location=[pt.y, pt.x], icon=etiqueta_rio).add_to(fg_hidro)
+                fg_hidro.add_to(m_base)
+        else:
+            folium.GeoJson(gdf, name=nombre).add_to(m_base)
 
-# 3. FIX: Limitar returned_objects para que React no reviente con removeChild
+    folium.LayerControl().add_to(m_base)
+    return m_base
+
+# Renderizamos el mapa guardado en caché
+m = crear_mapa_base()
 salida_mapa = st_folium(
     m, 
     width=1000, 
@@ -262,24 +242,16 @@ if archivo_datos.exists():
                 if not df_est.empty:
                     parametro = st.selectbox("Seleccione el parámetro a graficar:", df_est['PARAMETRO'].unique())
                     df_plot = df_est[df_est['PARAMETRO'] == parametro].copy()
-                    
                     df_plot['FECHA MEDICION'] = pd.to_datetime(df_plot['FECHA MEDICION'])
                     df_plot = df_plot.sort_values('FECHA MEDICION')
                     
                     fig = px.scatter(
                         df_plot, x='FECHA MEDICION', y='VALOR',
                         title=f"Serie temporal: {parametro} (Datos limpios)",
-                        trendline="lowess",
-                        trendline_color_override="blue",
-                        opacity=0.7
+                        trendline="lowess", trendline_color_override="blue", opacity=0.7
                     )
-                    
                     fig.update_traces(marker=dict(size=6))
-                    fig.update_layout(
-                        plot_bgcolor='white',
-                        xaxis=dict(showgrid=True, gridcolor='lightgray'),
-                        yaxis=dict(showgrid=True, gridcolor='lightgray')
-                    )
+                    fig.update_layout(plot_bgcolor='white', xaxis=dict(showgrid=True, gridcolor='lightgray'), yaxis=dict(showgrid=True, gridcolor='lightgray'))
                     
                     st.plotly_chart(fig, use_container_width=True)
                     st.dataframe(df_plot[['FECHA MEDICION', 'PARAMETRO', 'VALOR']], use_container_width=True)
