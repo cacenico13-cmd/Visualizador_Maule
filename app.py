@@ -328,24 +328,6 @@ def construir_mapa(_capas, incluir_dem):
             ).add_to(m)
 
     folium.LayerControl().add_to(m)
-
-    # Leyenda flotante con las capas activas
-    items = [nombre_visible(n) for n in _capas.keys()]
-    if incluir_dem:
-        items.append("Sombra de colina (DEM)")
-    if items:
-        filas = "".join(f"<li>{n}</li>" for n in items)
-        legend_html = f"""
-        <div style="position: fixed; top: 90px; right: 30px; z-index: 9999;
-            background: white; padding: 10px 14px; border-radius: 8px;
-            box-shadow: 0 1px 6px rgba(0,0,0,0.3); font-size: 12.5px; font-family: sans-serif;
-            max-width: 220px;">
-            <b>Capas activas</b>
-            <ul style="margin:6px 0 0 0; padding-left:18px;">{filas}</ul>
-        </div>
-        """
-        m.get_root().html.add_child(folium.Element(legend_html))
-
     return m
 
 capas_a_mostrar = {nombre: gdf for nombre, gdf in capas.items() if capas_visibles.get(nombre, True)}
@@ -388,6 +370,8 @@ with col_info:
             <li><b>BCN</b> - Biblioteca del Congreso Nacional</li>
             <li><b>MOP</b> - Ministerio de Obras Públicas</li>
         </ul>
+        <p style="margin-top:8px;"><b>Parámetros fisicoquímicos evaluados:</b> pH, Conductividad Eléctrica,
+        Oxígeno Disuelto, Nutrientes, metales pesados y más...</p>
     </div>
     """, unsafe_allow_html=True)
 
