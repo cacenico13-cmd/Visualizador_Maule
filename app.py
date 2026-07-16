@@ -161,7 +161,7 @@ capas = cargar_vectores()
 # Mapa
 # ─────────────────────────────────────────────────────────────
 st.sidebar.markdown("### 🛰️ Rasters")
-mostrar_dem = st.sidebar.checkbox("DEM (colormap elevación)", value=False)
+mostrar_dem = st.sidebar.checkbox("Sombra de colina (DEM)", value=False)
 
 st.sidebar.markdown("### 🗺️ Capas vectoriales")
 capas_visibles = {
@@ -187,30 +187,13 @@ def construir_mapa(_capas, incluir_dem):
         dem_file = DATA / "dem_hillshade.tif"
         if dem_file.exists():
             try:
-                img_b64, bounds, dem_min, dem_max = raster_a_overlay(dem_file, es_dem=True)
+                img_b64, bounds, _, _ = raster_a_overlay(dem_file, es_dem=False)
                 folium.raster_layers.ImageOverlay(
                     image=f"data:image/png;base64,{img_b64}",
                     bounds=bounds,
-                    opacity=0.82,
-                    name="DEM (elevación)"
+                    opacity=0.7,
+                    name="Sombra de colina"
                 ).add_to(m)
-
-                # Leyenda simple con el gradiente de COLORMAP_DEM y el rango real de elevación
-                if dem_min is not None and dem_max is not None:
-                    stops = ", ".join(f"{color} {pos*100:.0f}%" for pos, color in COLORMAP_DEM)
-                    legend_html = f"""
-                    <div style="position: fixed; bottom: 30px; left: 30px; z-index: 9999;
-                        background: white; padding: 8px 12px; border-radius: 6px;
-                        box-shadow: 0 1px 4px rgba(0,0,0,0.4); font-size: 12px; font-family: sans-serif;">
-                        <b>Elevación (m)</b><br>
-                        <div style="width: 160px; height: 12px; margin-top: 4px;
-                            background: linear-gradient(to right, {stops}); border: 1px solid #999;"></div>
-                        <div style="display:flex; justify-content:space-between; width:160px;">
-                            <span>{dem_min:.0f}</span><span>{dem_max:.0f}</span>
-                        </div>
-                    </div>
-                    """
-                    m.get_root().html.add_child(folium.Element(legend_html))
             except Exception as e:
                 st.error(f"Error cargando DEM: {e}")
 
