@@ -183,7 +183,9 @@ def construir_mapa(_capas, incluir_dem):
                 st.error(f"Error cargando DEM: {e}")
 
     # 2. Agregar Vectores y Etiquetas
-    for nombre, gdf in _capas.items():
+    # Las estaciones se procesan al final (quedan arriba, con prioridad de clic)
+    orden_capas = sorted(_capas.items(), key=lambda kv: "estacion" in kv[0].lower())
+    for nombre, gdf in orden_capas:
         nombre_lower = nombre.lower()
 
         # Capa de Estaciones
@@ -278,6 +280,8 @@ def construir_mapa(_capas, incluir_dem):
             ).add_to(m)
 
         # Capas Generales (ej. límite de cuenca) — sin relleno para no tapar el hillshade
+        # y SIN interactividad: si no, su relleno invisible captura los clics
+        # destinados a las estaciones que están debajo.
         else:
             folium.GeoJson(
                 gdf,
@@ -287,6 +291,7 @@ def construir_mapa(_capas, incluir_dem):
                     "weight": 1.5,
                     "fillOpacity": 0,
                 },
+                interactive=False,
             ).add_to(m)
 
     folium.LayerControl().add_to(m)
