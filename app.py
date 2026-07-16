@@ -48,6 +48,9 @@ def aplicar_colormap_dem(band, nodata):
     img_array = (rgba * 255).astype(np.uint8)
     return img_array, dem_min, dem_max
 
+# Un overlay en un mapa web no necesita más resolución que esto (evita picos de RAM)
+MAX_DIM_OVERLAY = 1500
+
 @st.cache_data
 def raster_a_overlay(raster_path, es_dem=False):
     with rasterio.open(raster_path) as src:
@@ -60,21 +63,30 @@ def raster_a_overlay(raster_path, es_dem=False):
             transform, width, height = calculate_default_transform(
                 src_crs, "EPSG:4326", src.width, src.height, *src.bounds
             )
-            data = np.zeros((src.count, height, width), dtype=np.float32)
-            for i in range(1, src.count + 1):
-                reproject(
-                    source=rasterio.band(src, i),
-                    destination=data[i - 1],
-                    src_transform=src.transform,
-                    src_crs=src_crs,
-                    dst_transform=transform,
-                    dst_crs="EPSG:4326",
-                    resampling=Resampling.bilinear,
-                )
-            bounds_wgs84 = rasterio.transform.array_bounds(height, width, transform)
         else:
-            data = src.read().astype(np.float32)
-            bounds_wgs84 = src.bounds
+            transform, width, height = src.transform, src.width, src.height
+
+        # Limitar tamaño de salida ANTES de reproyectar: reproyectar directo a un
+        # tamaño chico es mucho más liviano que reproyectar a resolución completa
+        # y recién después achicar (eso es lo que estaba causando el consumo de RAM excesivo).
+        escala = max(width, height) / MAX_DIM_OVERLAY
+        if escala > 1:
+            width = max(1, int(width / escala))
+            height = max(1, int(height / escala))
+            transform = transform * rasterio.Affine.scale(escala, escala)
+
+        data = np.zeros((src.count, height, width), dtype=np.float32)
+        for i in range(1, src.count + 1):
+            reproject(
+                source=rasterio.band(src, i),
+                destination=data[i - 1],
+                src_transform=src.transform,
+                src_crs=src_crs,
+                dst_transform=transform,
+                dst_crs="EPSG:4326",
+                resampling=Resampling.bilinear,
+            )
+        bounds_wgs84 = rasterio.transform.array_bounds(height, width, transform)
 
         nodata  = src.nodata
         dem_min = dem_max = None
