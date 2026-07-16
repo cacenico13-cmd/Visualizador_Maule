@@ -163,7 +163,6 @@ capas = cargar_vectores()
 st.sidebar.markdown("### 🛰️ Rasters")
 mostrar_dem = st.sidebar.checkbox("Sombra de colina (DEM)", value=False)
 
-@st.cache_resource
 def construir_mapa(_capas, incluir_dem):
     # Inicializamos el mapa directamente con OpenStreetMap para no tapar el relieve
     m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="OpenStreetMap")
@@ -219,9 +218,10 @@ def construir_mapa(_capas, incluir_dem):
                 fg_hidro = folium.FeatureGroup(name=nombre)
                 
                 cols_disp = [c for c in ["Nombre", "Dren_Tipo", "Region", "Provincia"] if c in gdf.columns]
+                gdf_liviano = gdf[["geometry"] + cols_disp]  # solo lo necesario, no todo el gpkg
                 
                 folium.GeoJson(
-                    gdf, 
+                    gdf_liviano, 
                     style_function=lambda x: {'color': '#1E88E5', 'weight': 1.5, 'opacity': 0.8},
                     tooltip=folium.GeoJsonTooltip(fields=cols_disp) if cols_disp else None
                 ).add_to(fg_hidro)
