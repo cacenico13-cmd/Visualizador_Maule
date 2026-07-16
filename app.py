@@ -349,8 +349,47 @@ def construir_mapa(_capas, incluir_dem):
     return m
 
 capas_a_mostrar = {nombre: gdf for nombre, gdf in capas.items() if capas_visibles.get(nombre, True)}
-m = construir_mapa(capas_a_mostrar, mostrar_dem)
-salida_mapa = st_folium(m, width=1000, height=500, key="mapa_final")
+
+col_mapa, col_info = st.columns([2, 1])
+
+with col_mapa:
+    m = construir_mapa(capas_a_mostrar, mostrar_dem)
+    salida_mapa = st_folium(m, width=None, height=500, key="mapa_final")
+
+with col_info:
+    st.markdown("""
+    <style>
+    .info-card{background:#fff;border-radius:10px;padding:14px 18px;
+        box-shadow:0 1px 6px rgba(0,0,0,0.08);margin-bottom:12px;border-left:4px solid #2563eb;}
+    .info-card h4{margin:0 0 8px 0;font-size:15px;}
+    .info-card ul{margin:0;padding-left:18px;font-size:13.5px;color:#333;}
+    .info-card p{font-size:13.5px;color:#333;margin:0;}
+    .info-card li{margin-bottom:3px;}
+    </style>
+    <div class="info-card">
+        <h4>ℹ️ Descripción</h4>
+        <p>Visualizador de la cuenca del río Maule con estaciones de calidad de agua de la DGA
+        y registros históricos. Presiona una estación en el mapa para ver sus parámetros
+        fisicoquímicos y exportar los gráficos con las tendencias temporales.</p>
+    </div>
+    <div class="info-card">
+        <h4>🎮 Qué puedes hacer</h4>
+        <ul>
+            <li>Explorar estaciones de calidad de agua en el mapa</li>
+            <li>Visualizar series de tiempo de parámetros fisicoquímicos</li>
+            <li>Exportar gráficos y datos</li>
+            <li>Activar/desactivar capas de información</li>
+        </ul>
+    </div>
+    <div class="info-card">
+        <h4>📄 Fuente de los datos</h4>
+        <ul>
+            <li><b>DGA</b> - Dirección General de Aguas</li>
+            <li><b>BCN</b> - Biblioteca del Congreso Nacional</li>
+            <li><b>MOP</b> - Ministerio de Obras Públicas</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
 # Análisis e Integración de Gráfico
