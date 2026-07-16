@@ -48,6 +48,7 @@ def aplicar_colormap_dem(band, nodata):
     img_array = (rgba * 255).astype(np.uint8)
     return img_array, dem_min, dem_max
 
+@st.cache_data
 def raster_a_overlay(raster_path, es_dem=False):
     with rasterio.open(raster_path) as src:
         # Parche de CRS: Si no tiene, forzamos UTM 19S (EPSG:32719) por seguridad
@@ -142,108 +143,113 @@ capas = cargar_vectores()
 # ─────────────────────────────────────────────────────────────
 # Mapa
 # ─────────────────────────────────────────────────────────────
-# Inicializamos el mapa directamente con OpenStreetMap para no tapar el relieve
-m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="OpenStreetMap")
+@st.cache_resource
+def construir_mapa(_capas):
+    # Inicializamos el mapa directamente con OpenStreetMap para no tapar el relieve
+    m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="OpenStreetMap")
 
-# 1. Agregar Hillshade
-dem_file = DATA / "dem_hillshade.tif"
-if dem_file.exists():
-    try:
-        img_b64, bounds, _, _ = raster_a_overlay(dem_file, es_dem=False)
-        folium.raster_layers.ImageOverlay(
-            image=f"data:image/png;base64,{img_b64}",
-            bounds=bounds,
-            opacity=0.7,
-            name="Sombra de colina"
-        ).add_to(m)
-    except Exception as e:
-        st.error(f"Error cargando DEM: {e}")
+    # 1. Agregar Hillshade
+    dem_file = DATA / "dem_hillshade.tif"
+    if dem_file.exists():
+        try:
+            img_b64, bounds, _, _ = raster_a_overlay(dem_file, es_dem=False)
+            folium.raster_layers.ImageOverlay(
+                image=f"data:image/png;base64,{img_b64}",
+                bounds=bounds,
+                opacity=0.7,
+                name="Sombra de colina"
+            ).add_to(m)
+        except Exception as e:
+            st.error(f"Error cargando DEM: {e}")
 
-# 2. Agregar Vectores y Etiquetas
-for nombre, gdf in capas.items():
-    nombre_lower = nombre.lower()
-    
-    # Capa de Estaciones
-    if "estacion" in nombre_lower:
-        folium.GeoJson(gdf, name=nombre, 
-                       marker=folium.CircleMarker(radius=6, fill=True, color="red"),
-                       tooltip=folium.GeoJsonTooltip(fields=[gdf.columns[1]])).add_to(m)
-                       
-    # Capa de Topónimos
-    elif "toponimo" in nombre_lower:
-        fg_toponimos = folium.FeatureGroup(name=nombre)
-        col_nombre = next((c for c in ["NOMBRE", "Nombre", "nombre", "TEXTO", "TextString", "NAME"] if c in gdf.columns), gdf.columns[0])
-        
-        for _, row in gdf.iterrows():
-            if row.geometry:
-                texto = str(row[col_nombre]).strip()
-                if texto and texto.lower() not in ["none", "nan", ""]:
-                    pt = row.geometry.representative_point()
-                    etiqueta = folium.DivIcon(
-                        html=f'<div style="font-size: 11px; font-weight: bold; color: #222; text-shadow: 1px 1px 3px white, -1px -1px 3px white, 1px -1px 3px white, -1px 1px 3px white; white-space: nowrap;">{texto}</div>'
-                    )
-                    folium.Marker(location=[pt.y, pt.x], icon=etiqueta).add_to(fg_toponimos)
-        fg_toponimos.add_to(m)
-        
-    # Capa de Hidrología 
-    elif "hidro" in nombre_lower or "subcuen" in nombre_lower:
-        
-        if "Dren_Tipo" in gdf.columns:
-            gdf = gdf[gdf["Dren_Tipo"] == "Río"]
+    # 2. Agregar Vectores y Etiquetas
+    for nombre, gdf in _capas.items():
+        nombre_lower = nombre.lower()
+
+        # Capa de Estaciones
+        if "estacion" in nombre_lower:
+            folium.GeoJson(gdf, name=nombre, 
+                           marker=folium.CircleMarker(radius=6, fill=True, color="red"),
+                           tooltip=folium.GeoJsonTooltip(fields=[gdf.columns[1]])).add_to(m)
+                           
+        # Capa de Topónimos
+        elif "toponimo" in nombre_lower:
+            fg_toponimos = folium.FeatureGroup(name=nombre)
+            col_nombre = next((c for c in ["NOMBRE", "Nombre", "nombre", "TEXTO", "TextString", "NAME"] if c in gdf.columns), gdf.columns[0])
             
-        if not gdf.empty:
-            fg_hidro = folium.FeatureGroup(name=nombre)
+            for _, row in gdf.iterrows():
+                if row.geometry:
+                    texto = str(row[col_nombre]).strip()
+                    if texto and texto.lower() not in ["none", "nan", ""]:
+                        pt = row.geometry.representative_point()
+                        etiqueta = folium.DivIcon(
+                            html=f'<div style="font-size: 11px; font-weight: bold; color: #222; text-shadow: 1px 1px 3px white, -1px -1px 3px white, 1px -1px 3px white, -1px 1px 3px white; white-space: nowrap;">{texto}</div>'
+                        )
+                        folium.Marker(location=[pt.y, pt.x], icon=etiqueta).add_to(fg_toponimos)
+            fg_toponimos.add_to(m)
             
-            cols_disp = [c for c in ["Nombre", "Dren_Tipo", "Region", "Provincia"] if c in gdf.columns]
+        # Capa de Hidrología 
+        elif "hidro" in nombre_lower or "subcuen" in nombre_lower:
             
-            folium.GeoJson(
-                gdf, 
-                style_function=lambda x: {'color': '#1E88E5', 'weight': 1.5, 'opacity': 0.8},
-                tooltip=folium.GeoJsonTooltip(fields=cols_disp) if cols_disp else None
-            ).add_to(fg_hidro)
-            
-            if "Nombre" in gdf.columns:
-                nombres_vistos = set()
+            if "Dren_Tipo" in gdf.columns:
+                gdf = gdf[gdf["Dren_Tipo"] == "Río"]
                 
-                for _, row in gdf.iterrows():
-                    if row.geometry and not pd.isna(row["Nombre"]):
-                        texto = str(row["Nombre"]).strip()
-                        if texto and texto.lower() not in ["none", "nan", "sin nombre", ""]:
-                            if texto not in nombres_vistos:
-                                nombres_vistos.add(texto)
-                                pt = row.geometry.representative_point()
-                                etiqueta_rio = folium.DivIcon(
-                                    html=f'<div style="font-size: 10px; font-style: italic; font-weight: bold; color: #0D47A1; text-shadow: 1px 1px 2px white, -1px -1px 2px white, 1px -1px 2px white, -1px 1px 2px white; white-space: nowrap;">{texto}</div>'
-                                )
-                                folium.Marker(location=[pt.y, pt.x], icon=etiqueta_rio).add_to(fg_hidro)
-            fg_hidro.add_to(m)
-        
-    # Cuerpos de agua (lagos/lagunas) — sí llevan relleno azul, son agua real
-    elif "lacustre" in nombre_lower or "masa" in nombre_lower:
-        folium.GeoJson(
-            gdf,
-            name=nombre,
-            style_function=lambda x: {
-                "color": "#1565C0",
-                "weight": 1,
-                "fillColor": "#1E88E5",
-                "fillOpacity": 0.5,
-            },
-        ).add_to(m)
+            if not gdf.empty:
+                fg_hidro = folium.FeatureGroup(name=nombre)
+                
+                cols_disp = [c for c in ["Nombre", "Dren_Tipo", "Region", "Provincia"] if c in gdf.columns]
+                
+                folium.GeoJson(
+                    gdf, 
+                    style_function=lambda x: {'color': '#1E88E5', 'weight': 1.5, 'opacity': 0.8},
+                    tooltip=folium.GeoJsonTooltip(fields=cols_disp) if cols_disp else None
+                ).add_to(fg_hidro)
+                
+                if "Nombre" in gdf.columns:
+                    nombres_vistos = set()
+                    
+                    for _, row in gdf.iterrows():
+                        if row.geometry and not pd.isna(row["Nombre"]):
+                            texto = str(row["Nombre"]).strip()
+                            if texto and texto.lower() not in ["none", "nan", "sin nombre", ""]:
+                                if texto not in nombres_vistos:
+                                    nombres_vistos.add(texto)
+                                    pt = row.geometry.representative_point()
+                                    etiqueta_rio = folium.DivIcon(
+                                        html=f'<div style="font-size: 10px; font-style: italic; font-weight: bold; color: #0D47A1; text-shadow: 1px 1px 2px white, -1px -1px 2px white, 1px -1px 2px white, -1px 1px 2px white; white-space: nowrap;">{texto}</div>'
+                                    )
+                                    folium.Marker(location=[pt.y, pt.x], icon=etiqueta_rio).add_to(fg_hidro)
+                fg_hidro.add_to(m)
+            
+        # Cuerpos de agua (lagos/lagunas) — sí llevan relleno azul, son agua real
+        elif "lacustre" in nombre_lower or "masa" in nombre_lower:
+            folium.GeoJson(
+                gdf,
+                name=nombre,
+                style_function=lambda x: {
+                    "color": "#1565C0",
+                    "weight": 1,
+                    "fillColor": "#1E88E5",
+                    "fillOpacity": 0.5,
+                },
+            ).add_to(m)
 
-    # Capas Generales (ej. límite de cuenca) — sin relleno para no tapar el hillshade
-    else:
-        folium.GeoJson(
-            gdf,
-            name=nombre,
-            style_function=lambda x: {
-                "color": "#333333",
-                "weight": 1.5,
-                "fillOpacity": 0,
-            },
-        ).add_to(m)
+        # Capas Generales (ej. límite de cuenca) — sin relleno para no tapar el hillshade
+        else:
+            folium.GeoJson(
+                gdf,
+                name=nombre,
+                style_function=lambda x: {
+                    "color": "#333333",
+                    "weight": 1.5,
+                    "fillOpacity": 0,
+                },
+            ).add_to(m)
 
-folium.LayerControl().add_to(m)
+    folium.LayerControl().add_to(m)
+    return m
+
+m = construir_mapa(capas)
 salida_mapa = st_folium(m, width=1000, height=500, key="mapa_final")
 
 # ─────────────────────────────────────────────────────────────
