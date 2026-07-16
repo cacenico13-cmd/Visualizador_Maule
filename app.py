@@ -188,9 +188,22 @@ def construir_mapa(_capas, incluir_dem):
 
         # Capa de Estaciones
         if "estacion" in nombre_lower:
-            folium.GeoJson(gdf, name=nombre, 
-                           marker=folium.CircleMarker(radius=6, fill=True, color="red"),
-                           tooltip=folium.GeoJsonTooltip(fields=[gdf.columns[1]])).add_to(m)
+            col_cod_est = next(
+                (c for c in ["COD. ESTACIÓN", "COD. ESTACION", "COD_ESTACION",
+                              "COD ESTACION", "CODIGO", "Codigo", "codigo"]
+                 if c in gdf.columns),
+                gdf.columns[0],
+            )
+            col_nombre_est = next(
+                (c for c in ["NOMBRE", "Nombre", "nombre"] if c in gdf.columns),
+                None,
+            )
+            campos_tooltip = [c for c in [col_cod_est, col_nombre_est] if c]
+            folium.GeoJson(
+                gdf, name=nombre,
+                marker=folium.CircleMarker(radius=6, fill=True, color="red"),
+                tooltip=folium.GeoJsonTooltip(fields=campos_tooltip),
+            ).add_to(m)
                            
         # Capa de Topónimos
         elif "toponimo" in nombre_lower:
@@ -205,7 +218,10 @@ def construir_mapa(_capas, incluir_dem):
                         etiqueta = folium.DivIcon(
                             html=f'<div style="font-size: 11px; font-weight: bold; color: #222; text-shadow: 1px 1px 3px white, -1px -1px 3px white, 1px -1px 3px white, -1px 1px 3px white; white-space: nowrap;">{texto}</div>'
                         )
-                        folium.Marker(location=[pt.y, pt.x], icon=etiqueta).add_to(fg_toponimos)
+                        folium.Marker(
+                            location=[pt.y, pt.x], icon=etiqueta,
+                            tooltip=texto,
+                        ).add_to(fg_toponimos)
             fg_toponimos.add_to(m)
             
         # Capa de Hidrología 
@@ -242,7 +258,10 @@ def construir_mapa(_capas, incluir_dem):
                                     etiqueta_rio = folium.DivIcon(
                                         html=f'<div style="font-size: 10px; font-style: italic; font-weight: bold; color: #0D47A1; text-shadow: 1px 1px 2px white, -1px -1px 2px white, 1px -1px 2px white, -1px 1px 2px white; white-space: nowrap;">{texto}</div>'
                                     )
-                                    folium.Marker(location=[pt.y, pt.x], icon=etiqueta_rio).add_to(fg_hidro)
+                                    folium.Marker(
+                                        location=[pt.y, pt.x], icon=etiqueta_rio,
+                                        tooltip=texto,
+                                    ).add_to(fg_hidro)
                 fg_hidro.add_to(m)
             
         # Cuerpos de agua (lagos/lagunas) — sí llevan relleno azul, son agua real
@@ -287,11 +306,21 @@ if archivo_datos.exists():
     
     if salida_mapa.get("last_active_drawing"):
         props = salida_mapa["last_active_drawing"].get("properties", {})
-        valor_mapa = list(props.values())[0] if props else None
+        col_cod_est = next(
+            (c for c in ["COD. ESTACIÓN", "COD. ESTACION", "COD_ESTACION",
+                          "COD ESTACION", "CODIGO", "Codigo", "codigo"]
+             if c in props),
+            None,
+        )
+        valor_mapa = props.get(col_cod_est) if col_cod_est else (list(props.values())[0] if props else None)
         
         if valor_mapa:
             st.write(f"### Estación detectada: {valor_mapa}")
-            col_codigo = 'COD. ESTACIÓN' 
+            col_codigo = next(
+                (c for c in ["COD. ESTACIÓN", "COD. ESTACION", "COD_ESTACION", "COD ESTACION"]
+                 if c in df.columns),
+                'COD. ESTACIÓN',
+            )
             
             if col_codigo in df.columns:
                 df_est = df[df[col_codigo].astype(str) == str(valor_mapa)]
