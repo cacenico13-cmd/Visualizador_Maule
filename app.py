@@ -146,6 +146,11 @@ def cargar_vectores():
             for col in gdf.select_dtypes(include=['datetime', 'datetimetz']).columns:
                 gdf[col] = gdf[col].astype(str)
             gdf = gdf[gdf.geometry.notnull() & ~gdf.geometry.is_empty]
+            # Simplificar geometrías: reduce vértices sin cambiar la forma visible
+            # a escala de cuenca. Clave para capas de líneas densas (ej. red de drenaje),
+            # que si no se simplifican pueden colgar el navegador al renderizar el GeoJSON.
+            if gdf.geom_type.isin(["LineString", "MultiLineString", "Polygon", "MultiPolygon"]).any():
+                gdf["geometry"] = gdf["geometry"].simplify(0.0003, preserve_topology=True)
             capas[archivo.stem.replace("_", " ")] = gdf
         except Exception: pass
     return capas
@@ -219,8 +224,11 @@ def construir_mapa(_capas):
                 
                 if "Nombre" in gdf.columns:
                     nombres_vistos = set()
+                    MAX_ETIQUETAS_RIO = 300  # límite de seguridad para no saturar el navegador
                     
                     for _, row in gdf.iterrows():
+                        if len(nombres_vistos) >= MAX_ETIQUETAS_RIO:
+                            break
                         if row.geometry and not pd.isna(row["Nombre"]):
                             texto = str(row["Nombre"]).strip()
                             if texto and texto.lower() not in ["none", "nan", "sin nombre", ""]:
