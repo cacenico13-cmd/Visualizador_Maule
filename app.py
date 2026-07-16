@@ -11,7 +11,7 @@ from rasterio.warp import calculate_default_transform, reproject, Resampling
 import io, base64
 from PIL import Image
 import matplotlib.colors as mcolors
-import branca.colormap as cm
+import branca.colormap as cm  # <--- Agregado para la leyenda del DEM
 
 # ─────────────────────────────────────────────────────────────
 # Configuración
@@ -49,12 +49,17 @@ def aplicar_colormap_dem(band, nodata):
     img_array = (rgba * 255).astype(np.uint8)
     return img_array, dem_min, dem_max
 
+# Un overlay en un mapa web no necesita más resolución que esto (evita picos de RAM)
 MAX_DIM_OVERLAY = 1500
 
 @st.cache_data
 def raster_a_overlay(raster_path, es_dem=False):
     with rasterio.open(raster_path) as src:
-        src_crs = src.crs or rasterio.crs.CRS.from_epsg(32719)
+        # Parche de CRS: Si no tiene, forzamos UTM 19S (EPSG:32719) por seguridad
+        src_crs = src.crs
+        if src_crs is None:
+            src_crs = rasterio.crs.CRS.from_epsg(32719)
+
         if src_crs.to_epsg() != 4326:
             transform, width, height = calculate_default_transform(
                 src_crs, "EPSG:4326", src.width, src.height, *src.bounds
@@ -62,6 +67,9 @@ def raster_a_overlay(raster_path, es_dem=False):
         else:
             transform, width, height = src.transform, src.width, src.height
 
+        # Limitar tamaño de salida ANTES de reproyectar: reproyectar directo a un
+        # tamaño chico es mucho más liviano que reproyectar a resolución completa
+        # y recién después achicar (eso es lo que estaba causando el consumo de RAM excesivo).
         escala = max(width, height) / MAX_DIM_OVERLAY
         if escala > 1:
             width = max(1, int(width / escala))
@@ -80,29 +88,50 @@ def raster_a_overlay(raster_path, es_dem=False):
                 resampling=Resampling.bilinear,
             )
         bounds_wgs84 = rasterio.transform.array_bounds(height, width, transform)
-        nodata, dem_min, dem_max = src.nodata, None, None
+
+        nodata  = src.nodata
+        dem_min = dem_max = None
 
         if es_dem:
             img_array, dem_min, dem_max = aplicar_colormap_dem(data[0], nodata)
         else:
-            rgb = np.stack([data[0]]*3) if src.count < 3 else data[:3].copy()
+            if src.count >= 3:
+                rgb = data[:3].copy()
+            else:
+                rgb = np.stack([data[0]] * 3)
+
+            # Corrección de NODATA para Hillshade
             for i in range(3):
-                mask = (rgb[i] == nodata) if nodata is not None else (rgb[i] <= 0)
-                valid = rgb[i][~mask]
+                band  = rgb[i]
+                # Si no hay nodata definido, asumimos que los valores <= 0 son el fondo
+                mask  = (band == nodata) if nodata is not None else (band <= 0)
+                valid = band[~mask]
                 if len(valid) > 0:
                     mn, mx = np.percentile(valid, 2), np.percentile(valid, 98)
-                    rgb[i] = np.clip((rgb[i] - mn) / (mx - mn + 1e-10), 0, 1)
+                    rgb[i] = np.clip((band - mn) / (mx - mn + 1e-10), 0, 1)
                 rgb[i][mask] = 0
+
             base = (np.transpose(rgb, (1, 2, 0)) * 255).astype(np.uint8)
             alpha = np.full((base.shape[0], base.shape[1]), 255, dtype=np.uint8)
-            alpha[data[0] <= (nodata if nodata is not None else 0)] = 0
+            
+            if nodata is not None:
+                alpha[data[0] == nodata] = 0
+            else:
+                alpha[data[0] <= 0] = 0
+                
             img_array = np.dstack([base, alpha])
 
         img_pil = Image.fromarray(img_array)
-        buf = io.BytesIO()
+        buf     = io.BytesIO()
         img_pil.save(buf, format="PNG")
         buf.seek(0)
-        return base64.b64encode(buf.read()).decode("utf-8"), [[bounds_wgs84[1], bounds_wgs84[0]], [bounds_wgs84[3], bounds_wgs84[2]]], dem_min, dem_max
+        img_b64 = base64.b64encode(buf.read()).decode("utf-8")
+
+        bounds = [
+            [bounds_wgs84[1], bounds_wgs84[0]],
+            [bounds_wgs84[3], bounds_wgs84[2]],
+        ]
+        return img_b64, bounds, dem_min, dem_max
 
 # ─────────────────────────────────────────────────────────────
 # Carga de Vectores y Sidebar
@@ -115,7 +144,12 @@ def cargar_vectores():
             gdf = gpd.read_file(archivo)
             if gdf.crs is None: gdf = gdf.set_crs("EPSG:32719", allow_override=True)
             gdf = gdf.to_crs("EPSG:4326")
+            for col in gdf.select_dtypes(include=['datetime', 'datetimetz']).columns:
+                gdf[col] = gdf[col].astype(str)
             gdf = gdf[gdf.geometry.notnull() & ~gdf.geometry.is_empty]
+            # Simplificar geometrías: reduce vértices sin cambiar la forma visible
+            # a escala de cuenca. Clave para capas de líneas densas (ej. red de drenaje),
+            # que si no se simplifican pueden colgar el navegador al renderizar el GeoJSON.
             if gdf.geom_type.isin(["LineString", "MultiLineString", "Polygon", "MultiPolygon"]).any():
                 gdf["geometry"] = gdf["geometry"].simplify(0.0003, preserve_topology=True)
             capas[archivo.stem.replace("_", " ")] = gdf
@@ -124,47 +158,240 @@ def cargar_vectores():
 
 capas = cargar_vectores()
 
-st.sidebar.markdown("### 🛰️ Capas y Controles")
+st.sidebar.markdown("### 🛰️ Rasters")
 mostrar_dem = st.sidebar.checkbox("Sombra de colina (DEM)", value=False)
+
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🗺️ Capas Vectoriales")
-check_capas = {nombre: st.sidebar.checkbox(nombre.title(), value=True) for nombre in capas.keys()}
+st.sidebar.markdown("### 🗺️ Capas Vectoriales") # <--- Agregado menú interactivo de capas
+check_capas = {}
+for nombre in capas.keys():
+    check_capas[nombre] = st.sidebar.checkbox(nombre.title(), value=True)
 
 # ─────────────────────────────────────────────────────────────
 # Mapa
 # ─────────────────────────────────────────────────────────────
 def construir_mapa(_capas, incluir_dem, _checks):
+    # <--- Cambiado a Esri.WorldImagery (Satélite)
     m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="Esri.WorldImagery")
+    
+    # <--- Agregada Escala
     folium.ControlScale().add_to(m)
 
+    # 1. Agregar Hillshade — SOLO si el usuario lo activa (evita bloquear la carga inicial)
     if incluir_dem:
         dem_file = DATA / "dem_hillshade.tif"
         if dem_file.exists():
-            img_b64, bounds, _, _ = raster_a_overlay(dem_file, es_dem=False)
-            folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img_b64}", bounds=bounds, opacity=0.7, name="Sombra de colina").add_to(m)
-            # Leyenda DEM
-            colormap = cm.LinearColormap(colors=[c for _, c in COLORMAP_DEM], caption="Elevación")
-            colormap.add_to(m)
+            try:
+                img_b64, bounds, _, _ = raster_a_overlay(dem_file, es_dem=False)
+                folium.raster_layers.ImageOverlay(
+                    image=f"data:image/png;base64,{img_b64}",
+                    bounds=bounds,
+                    opacity=0.7,
+                    name="Sombra de colina"
+                ).add_to(m)
+                
+                # <--- Agregada Leyenda del DEM
+                colormap = cm.LinearColormap(
+                    colors=[c for _, c in COLORMAP_DEM],
+                    caption="Elevación (Relieve)"
+                )
+                colormap.add_to(m)
+                
+            except Exception as e:
+                st.error(f"Error cargando DEM: {e}")
 
-    for nombre, gdf in _capas.items():
-        if not _checks.get(nombre, True): continue
-        # [Lógica de renderizado GeoJSON igual a tu versión original...]
-        # (Se omite la repetición interna para brevedad, insertar aquí tu lógica de 
-        # Estaciones, Topónimos, Hidro y General del código original)
-        folium.GeoJson(gdf, name=nombre).add_to(m)
+    # 2. Agregar Vectores y Etiquetas
+    # Las estaciones se procesan al final (quedan arriba, con prioridad de clic)
+    orden_capas = sorted(_capas.items(), key=lambda kv: "estacion" in kv[0].lower())
+    for nombre, gdf in orden_capas:
+        
+        # <--- Validación del checkbox
+        if not _checks.get(nombre, True):
+            continue
+            
+        nombre_lower = nombre.lower()
+
+        # Capa de Estaciones
+        if "estacion" in nombre_lower:
+            col_cod_est = next(
+                (c for c in ["COD_BNA", "COD. ESTACIÓN", "COD. ESTACION", "COD_ESTACION",
+                              "COD ESTACION", "CODIGO", "Codigo", "codigo"]
+                 if c in gdf.columns),
+                gdf.columns[0],
+            )
+            col_nombre_est = next(
+                (c for c in ["NOMBRE", "Nombre", "nombre"] if c in gdf.columns),
+                None,
+            )
+            campos_tooltip = [c for c in [col_cod_est, col_nombre_est] if c]
+            folium.GeoJson(
+                gdf, name=nombre,
+                marker=folium.CircleMarker(radius=6, fill=True, color="red"),
+                tooltip=folium.GeoJsonTooltip(fields=campos_tooltip),
+            ).add_to(m)
+                           
+        # Capa de Topónimos
+        elif "toponimo" in nombre_lower:
+            fg_toponimos = folium.FeatureGroup(name=nombre)
+            col_nombre = next((c for c in ["NOMBRE", "Nombre", "nombre", "TEXTO", "TextString", "NAME"] if c in gdf.columns), gdf.columns[0])
+            
+            for _, row in gdf.iterrows():
+                if row.geometry:
+                    texto = str(row[col_nombre]).strip()
+                    if texto and texto.lower() not in ["none", "nan", ""]:
+                        pt = row.geometry.representative_point()
+                        etiqueta = folium.DivIcon(
+                            html=f'<div style="font-size: 11px; font-weight: bold; color: #222; text-shadow: 1px 1px 3px white, -1px -1px 3px white, 1px -1px 3px white, -1px 1px 3px white; white-space: nowrap;">{texto}</div>'
+                        )
+                        folium.Marker(
+                            location=[pt.y, pt.x], icon=etiqueta,
+                            tooltip=texto,
+                        ).add_to(fg_toponimos)
+            fg_toponimos.add_to(m)
+            
+        # Capa de Hidrología 
+        elif "hidro" in nombre_lower or "subcuen" in nombre_lower:
+            
+            if "Dren_Tipo" in gdf.columns:
+                gdf = gdf[gdf["Dren_Tipo"] == "Río"]
+                
+            if not gdf.empty:
+                fg_hidro = folium.FeatureGroup(name=nombre)
+                
+                cols_disp = [c for c in ["Nombre", "Dren_Tipo", "Region", "Provincia"] if c in gdf.columns]
+                gdf_liviano = gdf[["geometry"] + cols_disp]  # solo lo necesario, no todo el gpkg
+                
+                folium.GeoJson(
+                    gdf_liviano, 
+                    style_function=lambda x: {'color': '#1E88E5', 'weight': 1.5, 'opacity': 0.8},
+                    tooltip=folium.GeoJsonTooltip(fields=cols_disp) if cols_disp else None
+                ).add_to(fg_hidro)
+                
+                if "Nombre" in gdf.columns:
+                    nombres_vistos = set()
+                    MAX_ETIQUETAS_RIO = 300  # límite de seguridad para no saturar el navegador
+                    
+                    for _, row in gdf.iterrows():
+                        if len(nombres_vistos) >= MAX_ETIQUETAS_RIO:
+                            break
+                        if row.geometry and not pd.isna(row["Nombre"]):
+                            texto = str(row["Nombre"]).strip()
+                            if texto and texto.lower() not in ["none", "nan", "sin nombre", ""]:
+                                if texto not in nombres_vistos:
+                                    nombres_vistos.add(texto)
+                                    pt = row.geometry.representative_point()
+                                    etiqueta_rio = folium.DivIcon(
+                                        html=f'<div style="font-size: 10px; font-style: italic; font-weight: bold; color: #0D47A1; text-shadow: 1px 1px 2px white, -1px -1px 2px white, 1px -1px 2px white, -1px 1px 2px white; white-space: nowrap;">{texto}</div>'
+                                    )
+                                    folium.Marker(
+                                        location=[pt.y, pt.x], icon=etiqueta_rio,
+                                        tooltip=texto,
+                                    ).add_to(fg_hidro)
+                fg_hidro.add_to(m)
+            
+        # Cuerpos de agua (lagos/lagunas) — sí llevan relleno azul, son agua real
+        elif "lacustre" in nombre_lower or "masa" in nombre_lower:
+            folium.GeoJson(
+                gdf,
+                name=nombre,
+                style_function=lambda x: {
+                    "color": "#1565C0",
+                    "weight": 1,
+                    "fillColor": "#1E88E5",
+                    "fillOpacity": 0.5,
+                },
+            ).add_to(m)
+
+        # Capas Generales (ej. límite de cuenca) — sin relleno para no tapar el hillshade
+        # y SIN interactividad: si no, su relleno invisible captura los clics
+        # destinados a las estaciones que están debajo.
+        else:
+            folium.GeoJson(
+                gdf,
+                name=nombre,
+                style_function=lambda x: {
+                    "color": "#333333",
+                    "weight": 1.5,
+                    "fillOpacity": 0,
+                },
+                interactive=False,
+            ).add_to(m)
 
     folium.LayerControl().add_to(m)
     return m
 
-m = construir_mapa(capas, mostrar_dem, check_capas)
+m = construir_mapa(capas, mostrar_dem, check_capas) # <--- Se pasa diccionario de checkboxes
 salida_mapa = st_folium(m, width=1000, height=500, key="mapa_final")
 
 # ─────────────────────────────────────────────────────────────
 # Análisis e Integración de Gráfico
 # ─────────────────────────────────────────────────────────────
-if archivo_datos.exists() and salida_mapa.get("last_active_drawing"):
-    # ... [tu lógica de filtro de estación]
-    fig = px.scatter(df_plot, x='FECHA MEDICION', y='VALOR', trendline="lowess")
-    st.plotly_chart(fig, use_container_width=True, config={
-        'toImageButtonOptions': {'format': 'png', 'filename': 'grafico_calidad', 'scale': 2}
-    })
+st.subheader("📊 Análisis de Calidad")
+archivo_datos = DATA / "datos_limpios_sin_outliers.xlsx"
+
+if archivo_datos.exists():
+    df = pd.read_excel(archivo_datos)
+    
+    if salida_mapa.get("last_active_drawing"):
+        props = salida_mapa["last_active_drawing"].get("properties", {})
+        col_cod_est = next(
+            (c for c in ["COD_BNA", "COD. ESTACIÓN", "COD. ESTACION", "COD_ESTACION",
+                          "COD ESTACION", "CODIGO", "Codigo", "codigo"]
+             if c in props),
+            None,
+        )
+        valor_mapa = props.get(col_cod_est) if col_cod_est else (list(props.values())[0] if props else None)
+        
+        if valor_mapa:
+            st.write(f"### Estación detectada: {valor_mapa}")
+            col_codigo = next(
+                (c for c in ["COD. ESTACIÓN", "COD. ESTACION", "COD_ESTACION", "COD ESTACION"]
+                 if c in df.columns),
+                'COD. ESTACIÓN',
+            )
+            
+            if col_codigo in df.columns:
+                df_est = df[df[col_codigo].astype(str) == str(valor_mapa)]
+                
+                if not df_est.empty:
+                    parametro = st.selectbox("Seleccione el parámetro a graficar:", df_est['PARAMETRO'].unique())
+                    df_plot = df_est[df_est['PARAMETRO'] == parametro].copy()
+                    
+                    df_plot['FECHA MEDICION'] = pd.to_datetime(df_plot['FECHA MEDICION'])
+                    df_plot = df_plot.sort_values('FECHA MEDICION')
+                    
+                    fig = px.scatter(
+                        df_plot, x='FECHA MEDICION', y='VALOR',
+                        title=f"Serie temporal: {parametro} (Datos limpios)",
+                        trendline="lowess",
+                        trendline_color_override="blue",
+                        opacity=0.7
+                    )
+                    
+                    fig.update_traces(marker=dict(size=6))
+                    fig.update_layout(
+                        plot_bgcolor='white',
+                        xaxis=dict(showgrid=True, gridcolor='lightgray'),
+                        yaxis=dict(showgrid=True, gridcolor='lightgray')
+                    )
+                    
+                    # <--- Agregada configuración para exportar a PNG
+                    st.plotly_chart(fig, use_container_width=True, config={
+                        'toImageButtonOptions': {
+                            'format': 'png', 
+                            'filename': f'grafico_{parametro}_{valor_mapa}',
+                            'height': 500,
+                            'width': 800,
+                            'scale': 2
+                        }
+                    })
+                    
+                    st.dataframe(df_plot[['FECHA MEDICION', 'PARAMETRO', 'VALOR']], use_container_width=True)
+                else:
+                    st.warning(f"No hay registros en el Excel para el código: {valor_mapa}")
+            else:
+                st.error(f"No se encontró la columna '{col_codigo}'.")
+        else:
+            st.info("No se pudo obtener el código del mapa.")
+    else:
+        st.info("👆 Haz clic en un marcador rojo en el mapa para ver el análisis.")
