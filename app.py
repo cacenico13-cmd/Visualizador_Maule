@@ -17,6 +17,21 @@ import matplotlib.colors as mcolors
 # ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="GeoVisualizador Cuenca del Maule", layout="wide")
 st.title("💧 GeoVisualizador Cuenca del Maule (Calidad de Agua)")
+
+st.markdown("""
+<style>
+.info-card{background:#fff;border-radius:10px;padding:14px 18px;
+    box-shadow:0 1px 6px rgba(0,0,0,0.08);margin-bottom:12px;border-left:4px solid #2563eb;}
+.info-card.red{border-left-color:#dc2626;}
+.info-card.teal{border-left-color:#0891b2;}
+.info-card h4{margin:0 0 8px 0;font-size:15px;}
+.info-card ul{margin:0;padding-left:18px;font-size:13.5px;color:#333;}
+.info-card p{font-size:13.5px;color:#333;margin:0;}
+.info-card li{margin-bottom:3px;}
+.footer-bar{background:#eef2ff;border-radius:8px;padding:14px 20px;margin-top:10px;
+    display:flex;justify-content:space-between;font-size:13.5px;color:#333;}
+</style>
+""", unsafe_allow_html=True)
 DATA = Path("data")
 
 # ─────────────────────────────────────────────────────────────
@@ -313,8 +328,80 @@ def construir_mapa(_capas, incluir_dem):
     return m
 
 capas_a_mostrar = {nombre: gdf for nombre, gdf in capas.items() if capas_visibles.get(nombre, True)}
-m = construir_mapa(capas_a_mostrar, mostrar_dem)
-salida_mapa = st_folium(m, width=1000, height=500, key="mapa_final")
+
+col_mapa, col_info = st.columns([2, 1])
+
+with col_mapa:
+    m = construir_mapa(capas_a_mostrar, mostrar_dem)
+    salida_mapa = st_folium(m, width=None, height=500, key="mapa_final")
+
+with col_info:
+    st.markdown("""
+    <div class="info-card">
+        <h4>ℹ️ Descripción</h4>
+        <p>Visualizador de la cuenca del río Maule con estaciones de calidad de agua de la DGA
+        y registros históricos. Presiona una estación en el mapa para ver sus parámetros
+        fisicoquímicos y exportar los gráficos con las tendencias temporales.</p>
+    </div>
+    <div class="info-card">
+        <h4>🎮 Qué puedes hacer</h4>
+        <ul>
+            <li>Explorar estaciones de calidad de agua en el mapa</li>
+            <li>Visualizar series de tiempo de parámetros fisicoquímicos</li>
+            <li>Exportar gráficos y datos</li>
+            <li>Activar/desactivar capas de información</li>
+        </ul>
+    </div>
+    <div class="info-card">
+        <h4>📄 Fuente de los datos</h4>
+        <ul>
+            <li><b>DGA</b> - Dirección General de Aguas</li>
+            <li><b>BCN</b> - Biblioteca del Congreso Nacional</li>
+            <li><b>MOP</b> - Ministerio de Obras Públicas</li>
+        </ul>
+    </div>
+    <div class="info-card">
+        <h4>ℹ️ Información del proyecto</h4>
+        <p>Este visualizador facilita el acceso y análisis de información de calidad de agua
+        en la cuenca del río Maule, apoyando la gestión integrada de los recursos hídricos.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    lista_capas_html = "".join(
+        f"<li>{'✅' if v else '⬜'} {n}</li>" for n, v in capas_visibles.items()
+    ) + f"<li>{'✅' if mostrar_dem else '⬜'} Sombra de colina (DEM)</li>"
+    st.markdown(f"""
+    <div class="info-card">
+        <h4>🗂️ Capas disponibles</h4>
+        <p>Activa o desactiva las capas para analizar la cuenca del Maule.</p>
+        <ul>{lista_capas_html}</ul>
+    </div>
+    """, unsafe_allow_html=True)
+with c2:
+    st.markdown("""
+    <div class="info-card red">
+        <h4>💧 Parámetros fisicoquímicos</h4>
+        <p>Se monitorean múltiples parámetros para evaluar la calidad del agua en las
+        estaciones de la DGA.</p>
+        <ul>
+            <li>pH</li><li>Conductividad Eléctrica</li><li>Oxígeno Disuelto</li>
+            <li>Sólidos Suspendidos Totales</li><li>Nitratos, Fosfatos y más...</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+with c3:
+    st.markdown("""
+    <div class="info-card teal">
+        <h4>🔑 Cómo usar</h4>
+        <ol style="padding-left:18px;font-size:13.5px;color:#333;margin:0;">
+            <li>Navega en el mapa y selecciona una estación (punto rojo).</li>
+            <li>Revisa sus parámetros fisicoquímicos.</li>
+            <li>Visualiza las series de tiempo y exporta los gráficos.</li>
+        </ol>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
 # Análisis e Integración de Gráfico
@@ -390,3 +477,10 @@ if archivo_datos.exists():
             st.info("No se pudo obtener el código del mapa.")
     else:
         st.info("👆 Haz clic en un marcador rojo en el mapa para ver el análisis.")
+
+st.markdown("""
+<div class="footer-bar">
+    <span>Desarrollado para la gestión y análisis de la calidad del agua en la cuenca del río Maule.</span>
+    <span>Contacto: calidadagua@ejemplo.cl</span>
+</div>
+""", unsafe_allow_html=True)
