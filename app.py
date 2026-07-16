@@ -20,14 +20,6 @@ st.title("💧 GeoVisualizador Cuenca del Maule (Calidad de Agua)")
 
 st.markdown("""
 <style>
-.info-card{background:#fff;border-radius:10px;padding:14px 18px;
-    box-shadow:0 1px 6px rgba(0,0,0,0.08);margin-bottom:12px;border-left:4px solid #2563eb;}
-.info-card.red{border-left-color:#dc2626;}
-.info-card.teal{border-left-color:#0891b2;}
-.info-card h4{margin:0 0 8px 0;font-size:15px;}
-.info-card ul{margin:0;padding-left:18px;font-size:13.5px;color:#333;}
-.info-card p{font-size:13.5px;color:#333;margin:0;}
-.info-card li{margin-bottom:3px;}
 .footer-bar{background:#eef2ff;border-radius:8px;padding:14px 20px;margin-top:10px;
     display:flex;justify-content:space-between;font-size:13.5px;color:#333;}
 </style>
@@ -172,6 +164,16 @@ def cargar_vectores():
 
 capas = cargar_vectores()
 
+# Nombres solo para mostrar en el visualizador (no afectan la lógica interna de matching)
+NOMBRES_VISIBLES = {
+    "Estaciones 2024final": "Estaciones calidad de agua DGA",
+    "Hidro subcuen": "Red hidrografica",
+    "Toponimos maule": "Toponimos",
+    "masas lacustres maule": "Lagos",
+}
+def nombre_visible(nombre):
+    return NOMBRES_VISIBLES.get(nombre, nombre)
+
 # ─────────────────────────────────────────────────────────────
 # Mapa
 # ─────────────────────────────────────────────────────────────
@@ -180,13 +182,14 @@ mostrar_dem = st.sidebar.checkbox("Sombra de colina (DEM)", value=False)
 
 st.sidebar.markdown("### 🗺️ Capas vectoriales")
 capas_visibles = {
-    nombre: st.sidebar.checkbox(nombre, value=True, key=f"chk_{nombre}")
+    nombre: st.sidebar.checkbox(nombre_visible(nombre), value=True, key=f"chk_{nombre}")
     for nombre in capas.keys()
 }
 
 def construir_mapa(_capas, incluir_dem):
     # Inicializamos el mapa directamente con OpenStreetMap para no tapar el relieve
-    m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="OpenStreetMap", control_scale=True)
+    m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="OpenStreetMap",
+                   control_scale=True, zoomSnap=0.25, zoomDelta=0.5, wheelPxPerZoomLevel=40)
 
     # Capa satelital de Google (base layer alternativa, seleccionable en LayerControl)
     folium.TileLayer(
@@ -232,14 +235,14 @@ def construir_mapa(_capas, incluir_dem):
             )
             campos_tooltip = [c for c in [col_cod_est, col_nombre_est] if c]
             folium.GeoJson(
-                gdf, name=nombre,
+                gdf, name=nombre_visible(nombre),
                 marker=folium.CircleMarker(radius=6, fill=True, color="red"),
                 tooltip=folium.GeoJsonTooltip(fields=campos_tooltip),
             ).add_to(m)
                            
         # Capa de Topónimos
         elif "toponimo" in nombre_lower:
-            fg_toponimos = folium.FeatureGroup(name=nombre)
+            fg_toponimos = folium.FeatureGroup(name=nombre_visible(nombre))
             col_nombre = next((c for c in ["NOMBRE", "Nombre", "nombre", "TEXTO", "TextString", "NAME"] if c in gdf.columns), gdf.columns[0])
             
             for _, row in gdf.iterrows():
@@ -263,7 +266,7 @@ def construir_mapa(_capas, incluir_dem):
                 gdf = gdf[gdf["Dren_Tipo"] == "Río"]
                 
             if not gdf.empty:
-                fg_hidro = folium.FeatureGroup(name=nombre)
+                fg_hidro = folium.FeatureGroup(name=nombre_visible(nombre))
                 
                 cols_disp = [c for c in ["Nombre", "Dren_Tipo", "Region", "Provincia"] if c in gdf.columns]
                 gdf_liviano = gdf[["geometry"] + cols_disp]  # solo lo necesario, no todo el gpkg
@@ -300,7 +303,7 @@ def construir_mapa(_capas, incluir_dem):
         elif "lacustre" in nombre_lower or "masa" in nombre_lower:
             folium.GeoJson(
                 gdf,
-                name=nombre,
+                name=nombre_visible(nombre),
                 style_function=lambda x: {
                     "color": "#1565C0",
                     "weight": 1,
@@ -315,7 +318,7 @@ def construir_mapa(_capas, incluir_dem):
         else:
             folium.GeoJson(
                 gdf,
-                name=nombre,
+                name=nombre_visible(nombre),
                 style_function=lambda x: {
                     "color": "#333333",
                     "weight": 1.5,
@@ -325,83 +328,29 @@ def construir_mapa(_capas, incluir_dem):
             ).add_to(m)
 
     folium.LayerControl().add_to(m)
+
+    # Leyenda flotante con las capas activas
+    items = [nombre_visible(n) for n in _capas.keys()]
+    if incluir_dem:
+        items.append("Sombra de colina (DEM)")
+    if items:
+        filas = "".join(f"<li>{n}</li>" for n in items)
+        legend_html = f"""
+        <div style="position: fixed; top: 90px; right: 30px; z-index: 9999;
+            background: white; padding: 10px 14px; border-radius: 8px;
+            box-shadow: 0 1px 6px rgba(0,0,0,0.3); font-size: 12.5px; font-family: sans-serif;
+            max-width: 220px;">
+            <b>Capas activas</b>
+            <ul style="margin:6px 0 0 0; padding-left:18px;">{filas}</ul>
+        </div>
+        """
+        m.get_root().html.add_child(folium.Element(legend_html))
+
     return m
 
 capas_a_mostrar = {nombre: gdf for nombre, gdf in capas.items() if capas_visibles.get(nombre, True)}
-
-col_mapa, col_info = st.columns([2, 1])
-
-with col_mapa:
-    m = construir_mapa(capas_a_mostrar, mostrar_dem)
-    salida_mapa = st_folium(m, width=None, height=500, key="mapa_final")
-
-with col_info:
-    st.markdown("""
-    <div class="info-card">
-        <h4>ℹ️ Descripción</h4>
-        <p>Visualizador de la cuenca del río Maule con estaciones de calidad de agua de la DGA
-        y registros históricos. Presiona una estación en el mapa para ver sus parámetros
-        fisicoquímicos y exportar los gráficos con las tendencias temporales.</p>
-    </div>
-    <div class="info-card">
-        <h4>🎮 Qué puedes hacer</h4>
-        <ul>
-            <li>Explorar estaciones de calidad de agua en el mapa</li>
-            <li>Visualizar series de tiempo de parámetros fisicoquímicos</li>
-            <li>Exportar gráficos y datos</li>
-            <li>Activar/desactivar capas de información</li>
-        </ul>
-    </div>
-    <div class="info-card">
-        <h4>📄 Fuente de los datos</h4>
-        <ul>
-            <li><b>DGA</b> - Dirección General de Aguas</li>
-            <li><b>BCN</b> - Biblioteca del Congreso Nacional</li>
-            <li><b>MOP</b> - Ministerio de Obras Públicas</li>
-        </ul>
-    </div>
-    <div class="info-card">
-        <h4>ℹ️ Información del proyecto</h4>
-        <p>Este visualizador facilita el acceso y análisis de información de calidad de agua
-        en la cuenca del río Maule, apoyando la gestión integrada de los recursos hídricos.</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-c1, c2, c3 = st.columns(3)
-with c1:
-    lista_capas_html = "".join(
-        f"<li>{'✅' if v else '⬜'} {n}</li>" for n, v in capas_visibles.items()
-    ) + f"<li>{'✅' if mostrar_dem else '⬜'} Sombra de colina (DEM)</li>"
-    st.markdown(f"""
-    <div class="info-card">
-        <h4>🗂️ Capas disponibles</h4>
-        <p>Activa o desactiva las capas para analizar la cuenca del Maule.</p>
-        <ul>{lista_capas_html}</ul>
-    </div>
-    """, unsafe_allow_html=True)
-with c2:
-    st.markdown("""
-    <div class="info-card red">
-        <h4>💧 Parámetros fisicoquímicos</h4>
-        <p>Se monitorean múltiples parámetros para evaluar la calidad del agua en las
-        estaciones de la DGA.</p>
-        <ul>
-            <li>pH</li><li>Conductividad Eléctrica</li><li>Oxígeno Disuelto</li>
-            <li>Sólidos Suspendidos Totales</li><li>Nitratos, Fosfatos y más...</li>
-        </ul>
-    </div>
-    """, unsafe_allow_html=True)
-with c3:
-    st.markdown("""
-    <div class="info-card teal">
-        <h4>🔑 Cómo usar</h4>
-        <ol style="padding-left:18px;font-size:13.5px;color:#333;margin:0;">
-            <li>Navega en el mapa y selecciona una estación (punto rojo).</li>
-            <li>Revisa sus parámetros fisicoquímicos.</li>
-            <li>Visualiza las series de tiempo y exporta los gráficos.</li>
-        </ol>
-    </div>
-    """, unsafe_allow_html=True)
+m = construir_mapa(capas_a_mostrar, mostrar_dem)
+salida_mapa = st_folium(m, width=1000, height=500, key="mapa_final")
 
 # ─────────────────────────────────────────────────────────────
 # Análisis e Integración de Gráfico
