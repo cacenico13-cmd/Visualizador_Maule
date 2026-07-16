@@ -161,24 +161,56 @@ capas = cargar_vectores()
 # Mapa
 # ─────────────────────────────────────────────────────────────
 st.sidebar.markdown("### 🛰️ Rasters")
-mostrar_dem = st.sidebar.checkbox("Sombra de colina (DEM)", value=False)
+mostrar_dem = st.sidebar.checkbox("DEM (colormap elevación)", value=False)
+
+st.sidebar.markdown("### 🗺️ Capas vectoriales")
+capas_visibles = {
+    nombre: st.sidebar.checkbox(nombre, value=True, key=f"chk_{nombre}")
+    for nombre in capas.keys()
+}
 
 def construir_mapa(_capas, incluir_dem):
     # Inicializamos el mapa directamente con OpenStreetMap para no tapar el relieve
-    m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="OpenStreetMap")
+    m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="OpenStreetMap", control_scale=True)
+
+    # Capa satelital de Google (base layer alternativa, seleccionable en LayerControl)
+    folium.TileLayer(
+        tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        attr="Google Satellite",
+        name="Google Satélite",
+        overlay=False,
+        control=True,
+    ).add_to(m)
 
     # 1. Agregar Hillshade — SOLO si el usuario lo activa (evita bloquear la carga inicial)
     if incluir_dem:
         dem_file = DATA / "dem_hillshade.tif"
         if dem_file.exists():
             try:
-                img_b64, bounds, _, _ = raster_a_overlay(dem_file, es_dem=False)
+                img_b64, bounds, dem_min, dem_max = raster_a_overlay(dem_file, es_dem=True)
                 folium.raster_layers.ImageOverlay(
                     image=f"data:image/png;base64,{img_b64}",
                     bounds=bounds,
-                    opacity=0.7,
-                    name="Sombra de colina"
+                    opacity=0.82,
+                    name="DEM (elevación)"
                 ).add_to(m)
+
+                # Leyenda simple con el gradiente de COLORMAP_DEM y el rango real de elevación
+                if dem_min is not None and dem_max is not None:
+                    stops = ", ".join(f"{color} {pos*100:.0f}%" for pos, color in COLORMAP_DEM)
+                    legend_html = f"""
+                    <div style="position: fixed; bottom: 30px; left: 30px; z-index: 9999;
+                        background: white; padding: 8px 12px; border-radius: 6px;
+                        box-shadow: 0 1px 4px rgba(0,0,0,0.4); font-size: 12px; font-family: sans-serif;">
+                        <b>Elevación (m)</b><br>
+                        <div style="width: 160px; height: 12px; margin-top: 4px;
+                            background: linear-gradient(to right, {stops}); border: 1px solid #999;"></div>
+                        <div style="display:flex; justify-content:space-between; width:160px;">
+                            <span>{dem_min:.0f}</span><span>{dem_max:.0f}</span>
+                        </div>
+                    </div>
+                    """
+                    m.get_root().html.add_child(folium.Element(legend_html))
             except Exception as e:
                 st.error(f"Error cargando DEM: {e}")
 
@@ -297,7 +329,8 @@ def construir_mapa(_capas, incluir_dem):
     folium.LayerControl().add_to(m)
     return m
 
-m = construir_mapa(capas, mostrar_dem)
+capas_a_mostrar = {nombre: gdf for nombre, gdf in capas.items() if capas_visibles.get(nombre, True)}
+m = construir_mapa(capas_a_mostrar, mostrar_dem)
 salida_mapa = st_folium(m, width=1000, height=500, key="mapa_final")
 
 # ─────────────────────────────────────────────────────────────
@@ -352,7 +385,19 @@ if archivo_datos.exists():
                         yaxis=dict(showgrid=True, gridcolor='lightgray')
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    formato_export = st.radio(
+                        "Formato de descarga del gráfico:", ["png", "jpeg"], horizontal=True
+                    )
+                    config_export = {
+                        "toImageButtonOptions": {
+                            "format": formato_export,
+                            "filename": f"{parametro}_{valor_mapa}",
+                            "scale": 2,
+                        },
+                        "displaylogo": False,
+                    }
+                    st.plotly_chart(fig, use_container_width=True, config=config_export)
+                    st.caption("📷 Usa el ícono de la cámara en la barra del gráfico para descargarlo.")
                     st.dataframe(df_plot[['FECHA MEDICION', 'PARAMETRO', 'VALOR']], use_container_width=True)
                 else:
                     st.warning(f"No hay registros en el Excel para el código: {valor_mapa}")
