@@ -160,24 +160,28 @@ capas = cargar_vectores()
 # ─────────────────────────────────────────────────────────────
 # Mapa
 # ─────────────────────────────────────────────────────────────
+st.sidebar.markdown("### 🛰️ Rasters")
+mostrar_dem = st.sidebar.checkbox("Sombra de colina (DEM)", value=False)
+
 @st.cache_resource
-def construir_mapa(_capas):
+def construir_mapa(_capas, incluir_dem):
     # Inicializamos el mapa directamente con OpenStreetMap para no tapar el relieve
     m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="OpenStreetMap")
 
-    # 1. Agregar Hillshade
-    dem_file = DATA / "dem_hillshade.tif"
-    if dem_file.exists():
-        try:
-            img_b64, bounds, _, _ = raster_a_overlay(dem_file, es_dem=False)
-            folium.raster_layers.ImageOverlay(
-                image=f"data:image/png;base64,{img_b64}",
-                bounds=bounds,
-                opacity=0.7,
-                name="Sombra de colina"
-            ).add_to(m)
-        except Exception as e:
-            st.error(f"Error cargando DEM: {e}")
+    # 1. Agregar Hillshade — SOLO si el usuario lo activa (evita bloquear la carga inicial)
+    if incluir_dem:
+        dem_file = DATA / "dem_hillshade.tif"
+        if dem_file.exists():
+            try:
+                img_b64, bounds, _, _ = raster_a_overlay(dem_file, es_dem=False)
+                folium.raster_layers.ImageOverlay(
+                    image=f"data:image/png;base64,{img_b64}",
+                    bounds=bounds,
+                    opacity=0.7,
+                    name="Sombra de colina"
+                ).add_to(m)
+            except Exception as e:
+                st.error(f"Error cargando DEM: {e}")
 
     # 2. Agregar Vectores y Etiquetas
     for nombre, gdf in _capas.items():
@@ -269,7 +273,7 @@ def construir_mapa(_capas):
     folium.LayerControl().add_to(m)
     return m
 
-m = construir_mapa(capas)
+m = construir_mapa(capas, mostrar_dem)
 salida_mapa = st_folium(m, width=1000, height=500, key="mapa_final")
 
 # ─────────────────────────────────────────────────────────────
