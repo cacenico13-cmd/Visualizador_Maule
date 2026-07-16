@@ -11,7 +11,6 @@ from rasterio.warp import calculate_default_transform, reproject, Resampling
 import io, base64
 from PIL import Image
 import matplotlib.colors as mcolors
-import branca.colormap as cm  # <--- Agregado para la leyenda del DEM
 
 # ─────────────────────────────────────────────────────────────
 # Configuración
@@ -134,7 +133,7 @@ def raster_a_overlay(raster_path, es_dem=False):
         return img_b64, bounds, dem_min, dem_max
 
 # ─────────────────────────────────────────────────────────────
-# Carga de Vectores y Sidebar
+# Carga de Vectores
 # ─────────────────────────────────────────────────────────────
 @st.cache_data
 def cargar_vectores():
@@ -158,24 +157,15 @@ def cargar_vectores():
 
 capas = cargar_vectores()
 
-st.sidebar.markdown("### 🛰️ Rasters")
-mostrar_dem = st.sidebar.checkbox("Sombra de colina (DEM)", value=False)
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🗺️ Capas Vectoriales") # <--- Agregado menú interactivo de capas
-check_capas = {}
-for nombre in capas.keys():
-    check_capas[nombre] = st.sidebar.checkbox(nombre.title(), value=True)
-
 # ─────────────────────────────────────────────────────────────
 # Mapa
 # ─────────────────────────────────────────────────────────────
-def construir_mapa(_capas, incluir_dem, _checks):
-    # <--- Cambiado a Esri.WorldImagery (Satélite)
-    m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="Esri.WorldImagery")
-    
-    # <--- Agregada Escala
-    folium.ControlScale().add_to(m)
+st.sidebar.markdown("### 🛰️ Rasters")
+mostrar_dem = st.sidebar.checkbox("Sombra de colina (DEM)", value=False)
+
+def construir_mapa(_capas, incluir_dem):
+    # Inicializamos el mapa directamente con OpenStreetMap para no tapar el relieve
+    m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="OpenStreetMap")
 
     # 1. Agregar Hillshade — SOLO si el usuario lo activa (evita bloquear la carga inicial)
     if incluir_dem:
@@ -189,14 +179,6 @@ def construir_mapa(_capas, incluir_dem, _checks):
                     opacity=0.7,
                     name="Sombra de colina"
                 ).add_to(m)
-                
-                # <--- Agregada Leyenda del DEM
-                colormap = cm.LinearColormap(
-                    colors=[c for _, c in COLORMAP_DEM],
-                    caption="Elevación (Relieve)"
-                )
-                colormap.add_to(m)
-                
             except Exception as e:
                 st.error(f"Error cargando DEM: {e}")
 
@@ -204,11 +186,6 @@ def construir_mapa(_capas, incluir_dem, _checks):
     # Las estaciones se procesan al final (quedan arriba, con prioridad de clic)
     orden_capas = sorted(_capas.items(), key=lambda kv: "estacion" in kv[0].lower())
     for nombre, gdf in orden_capas:
-        
-        # <--- Validación del checkbox
-        if not _checks.get(nombre, True):
-            continue
-            
         nombre_lower = nombre.lower()
 
         # Capa de Estaciones
@@ -320,7 +297,7 @@ def construir_mapa(_capas, incluir_dem, _checks):
     folium.LayerControl().add_to(m)
     return m
 
-m = construir_mapa(capas, mostrar_dem, check_capas) # <--- Se pasa diccionario de checkboxes
+m = construir_mapa(capas, mostrar_dem)
 salida_mapa = st_folium(m, width=1000, height=500, key="mapa_final")
 
 # ─────────────────────────────────────────────────────────────
@@ -375,17 +352,7 @@ if archivo_datos.exists():
                         yaxis=dict(showgrid=True, gridcolor='lightgray')
                     )
                     
-                    # <--- Agregada configuración para exportar a PNG
-                    st.plotly_chart(fig, use_container_width=True, config={
-                        'toImageButtonOptions': {
-                            'format': 'png', 
-                            'filename': f'grafico_{parametro}_{valor_mapa}',
-                            'height': 500,
-                            'width': 800,
-                            'scale': 2
-                        }
-                    })
-                    
+                    st.plotly_chart(fig, use_container_width=True)
                     st.dataframe(df_plot[['FECHA MEDICION', 'PARAMETRO', 'VALOR']], use_container_width=True)
                 else:
                     st.warning(f"No hay registros en el Excel para el código: {valor_mapa}")
