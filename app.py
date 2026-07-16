@@ -189,7 +189,7 @@ def construir_mapa(_capas, incluir_dem):
         # Capa de Estaciones
         if "estacion" in nombre_lower:
             col_cod_est = next(
-                (c for c in ["COD. ESTACIÓN", "COD. ESTACION", "COD_ESTACION",
+                (c for c in ["COD_BNA", "COD. ESTACIÓN", "COD. ESTACION", "COD_ESTACION",
                               "COD ESTACION", "CODIGO", "Codigo", "codigo"]
                  if c in gdf.columns),
                 gdf.columns[0],
@@ -307,7 +307,7 @@ if archivo_datos.exists():
     if salida_mapa.get("last_active_drawing"):
         props = salida_mapa["last_active_drawing"].get("properties", {})
         col_cod_est = next(
-            (c for c in ["COD. ESTACIÓN", "COD. ESTACION", "COD_ESTACION",
+            (c for c in ["COD_BNA", "COD. ESTACIÓN", "COD. ESTACION", "COD_ESTACION",
                           "COD ESTACION", "CODIGO", "Codigo", "codigo"]
              if c in props),
             None,
