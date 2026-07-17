@@ -1,6 +1,7 @@
 import streamlit as st
 import geopandas as gpd
 import folium
+from folium.plugins import MiniMap, MeasureControl
 from streamlit_folium import st_folium
 from pathlib import Path
 import pandas as pd
@@ -328,6 +329,10 @@ def construir_mapa(_capas, incluir_dem):
             ).add_to(m)
 
     folium.LayerControl().add_to(m)
+
+    # MiniMap de contexto (esquina inferior) y control de medición de distancia/área
+    MiniMap(toggle_display=True, position="bottomleft").add_to(m)
+    MeasureControl(primary_length_unit="kilometers", primary_area_unit="hectares").add_to(m)
 
     # Leyenda fija con los símbolos de cada capa
     legend_html = """
