@@ -339,8 +339,7 @@ col_mapa, col_info = st.columns([2, 1])
 
 with col_mapa:
     m = construir_mapa(nombres_activos, mostrar_dem)
-    salida_mapa = st_folium(m, width=None, height=500, key="mapa_final",
-                             returned_objects=["last_active_drawing"])
+    salida_mapa = st_folium(m, width=None, height=500, key="mapa_final")
 
 with col_info:
     st.markdown("""
