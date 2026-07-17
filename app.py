@@ -483,6 +483,5 @@ if archivo_datos.exists():
 st.markdown("""
 <div class="footer-bar">
     <span>Desarrollado para la gestión y análisis de la calidad del agua en la cuenca del río Maule.</span>
-    <span>Contacto: calidadagua@ejemplo.cl</span>
 </div>
 """, unsafe_allow_html=True)
