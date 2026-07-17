@@ -186,13 +186,10 @@ capas_visibles = {
     for nombre in capas.keys()
 }
 
-@st.cache_resource(show_spinner=False)
-def construir_mapa(nombres_capas, incluir_dem):
-    _capas = {n: capas[n] for n in nombres_capas}
+def construir_mapa(_capas, incluir_dem):
     # Inicializamos el mapa directamente con OpenStreetMap para no tapar el relieve
     m = folium.Map(location=[-35.7, -71.5], zoom_start=9, tiles="OpenStreetMap",
-                   control_scale=True, zoomSnap=0.25, zoomDelta=0.5, wheelPxPerZoomLevel=40,
-                   prefer_canvas=True)
+                   control_scale=True, zoomSnap=0.25, zoomDelta=0.5, wheelPxPerZoomLevel=40)
 
     # Capa satelital de Google (base layer alternativa, seleccionable en LayerControl)
     folium.TileLayer(
@@ -333,12 +330,12 @@ def construir_mapa(nombres_capas, incluir_dem):
     folium.LayerControl().add_to(m)
     return m
 
-nombres_activos = tuple(sorted(nombre for nombre, visible in capas_visibles.items() if visible))
+capas_a_mostrar = {nombre: gdf for nombre, gdf in capas.items() if capas_visibles.get(nombre, True)}
 
 col_mapa, col_info = st.columns([2, 1])
 
 with col_mapa:
-    m = construir_mapa(nombres_activos, mostrar_dem)
+    m = construir_mapa(capas_a_mostrar, mostrar_dem)
     salida_mapa = st_folium(m, width=None, height=500, key="mapa_final")
 
 with col_info:
