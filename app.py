@@ -328,6 +328,36 @@ def construir_mapa(_capas, incluir_dem):
             ).add_to(m)
 
     folium.LayerControl().add_to(m)
+
+    # Leyenda fija con los símbolos de cada capa
+    legend_html = """
+    <div style="position: fixed; bottom: 30px; right: 10px; z-index: 9999;
+        background: rgba(255,255,255,0.92); padding: 10px 14px; border-radius: 8px;
+        box-shadow: 0 1px 6px rgba(0,0,0,0.3); font-size: 12.5px; font-family: sans-serif;">
+        <b>Leyenda</b>
+        <div style="margin-top:6px; display:flex; align-items:center; gap:6px;">
+            <span style="width:11px;height:11px;border-radius:50%;background:red;display:inline-block;"></span>
+            Estaciones calidad de agua DGA
+        </div>
+        <div style="margin-top:4px; display:flex; align-items:center; gap:6px;">
+            <span style="width:16px;height:3px;background:#1E88E5;display:inline-block;"></span>
+            Red hidrografica
+        </div>
+        <div style="margin-top:4px; display:flex; align-items:center; gap:6px;">
+            <span style="font-weight:bold;font-style:italic;color:#222;">Aa</span>
+            Toponimos
+        </div>
+        <div style="margin-top:4px; display:flex; align-items:center; gap:6px;">
+            <span style="width:13px;height:13px;background:#1E88E5;border:1.5px solid #1565C0;display:inline-block;"></span>
+            Lagos
+        </div>
+        <div style="margin-top:4px; display:flex; align-items:center; gap:6px;">
+            <span style="width:13px;height:13px;border:1.5px solid #333333;display:inline-block;"></span>
+            Cuenca Rio Maule
+        </div>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legend_html))
     return m
 
 capas_a_mostrar = {nombre: gdf for nombre, gdf in capas.items() if capas_visibles.get(nombre, True)}
